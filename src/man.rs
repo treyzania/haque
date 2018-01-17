@@ -1,10 +1,15 @@
 
 use std::mem;
+use std::ptr;
 
 use libc::{self, c_void};
 
 /// Manually-managed pointer type.  You must manually call `.free()` on these values somewhere if
 /// you don't want to screw yourself later on.
+///
+/// Since this uses the libc `malloc` function, it can be passed into C code and freed with the
+/// `free` function there if you need to.  And vice-versa.  Although usually this only works well
+/// with simpler structs and primitive arrays.
 ///
 /// **WARNING:** Everything to do with this type is incredibly unsafe.  You're better off using
 /// something else in nearly every case.
@@ -14,36 +19,34 @@ pub struct Man<T>(*mut T);
 impl<T> Man<T> {
 
     /// Creates a new manually-managed pointer instance.
-    pub unsafe fn new(val: T) -> Man<T> {
+    pub unsafe fn new(mut val: T) -> Man<T> {
 
+        // First we allocate it on the heap.
         let (size, ptr) = typed_malloc::<T>();
-        libc::memcpy(ptr as *mut c_void, &val as *const T as *const c_void, size);
+        ptr::copy_nonoverlapping(&mut val, ptr, size);
+
+        // We have to make sure it's not *actually* dropped naturally, as it "still exists" in the new location.
+        mem::forget(val);
+
+        // Then just return the constructed pointer.
         Man(ptr as *mut T)
 
     }
 
-    /// Frees the pointer.  This consumes it, but other references to the underlying data
-    /// (identical to this one) may still exist.  If they do and you try to use them, it *will*
-    /// cause undefined behavior.
+    /// Creates a `Man<T>` from a raw pointer.
+    pub unsafe fn from_raw(p: *const T) -> Man<T> {
+        Man(p as *mut T)
+    }
+
+    /// Frees the underlying data.  This doesn't do anything to prevent double-frees.
     pub unsafe fn free(self) {
 
-        // Do some horrible hacks to drop the contained value.
-        // FIXME This causes segfaults.
-        let buf = mem::uninitialized::<T>(); // What's horrible is that this doesn't need to be mut.
-        libc::memcpy(&buf as *const T as *mut c_void, self.0 as *const c_void, mem::size_of::<T>());
-        mem::drop(buf);
+        // Drop the value.
+        ptr::drop_in_place(self.0);
 
-        // Actually free it.
-        libc::free(self.0 as *mut c_void)
+        // Now we can free the memory we requested.
+        libc::free(self.0 as *mut c_void);
 
-    }
-
-    pub fn as_raw(&self) -> *const T {
-        self.0 as *const T
-    }
-
-    pub fn as_mut_raw(&self) -> *mut T {
-        self.0
     }
 
 }
@@ -69,13 +72,28 @@ impl<T> AsRef<T> for Man<T> {
     }
 }
 
+impl<T> AsMut<T> for Man<T> {
+    fn as_mut(&mut self) -> &mut T {
+        unsafe { mem::transmute::<*mut T, &mut T>(self.0) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
     use super::Man;
 
     #[test]
-    pub fn test_string() {
+    pub fn test_man_dereference() {
+        unsafe {
+            let p = Man::new(42);
+            assert_eq!(*p.as_ref(), 42);
+            p.free()
+        }
+    }
+
+    #[test]
+    pub fn test_man_string() {
         unsafe {
             let p = Man::new(String::from("foobar"));
             assert_eq!(p.as_ref().as_str(), "foobar");
@@ -84,11 +102,19 @@ mod tests {
     }
 
     #[test]
-    pub fn test_dereference() {
+    pub fn test_man_big_drop() {
+        const KILOBYTE: usize = 1024;
         unsafe {
-            let p = Man::new(42);
-            assert_eq!(*p.as_ref(), 42);
-            p.free()
+
+            /*
+             * End up allocating hopefully around 64 gigabytes.  If we don't free it right then
+             * it'll overflow the heap on most machines and crash.
+             */
+            for _ in 0..(64 * 1024 * 1024) {
+                let p = Man::new(Box::new([0u8; KILOBYTE])); // the bigger data is stored elsewhere with this
+                //p.free();
+            }
+
         }
     }
 
