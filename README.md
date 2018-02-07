@@ -2,6 +2,8 @@
 
 Haque is a Rust library for doing "unsafe hacks" with memory management!
 
+Crates.IO: https://crates.io/crates/haque
+
 ## Tools
 
 ### `Man<T>`
