@@ -22,3 +22,14 @@ references, so good luck with that, buddy.
 heap space, as if you don't then it'll leak memory.  And be sure that you don't
 try to access it *after* you've freed it because *that's wrong*.  Also don't
 call free on it twice.
+
+### `Fob<T>`
+
+The `Fob<T>` type is a file-backed struct mapping.  It's actually reasonably
+safe to use and isn't as much of a "hack" as the name of this library would
+lead you to believe.  
+
+It's actually should be mostly safe as long as `T` is `Copy`, which is an
+invariant I've enforced in the declaration.
+
+It's also convenient for making shared mappings, since we pass in `MAP_SHARED`.
